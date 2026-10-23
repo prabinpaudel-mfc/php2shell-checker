@@ -192,3 +192,65 @@ test('the URL skill runs independently with its bundled checker', async t => {
   check(result, 'ok', '8.4.27')
   assert.deepEqual(methods, ['HEAD'])
 })
+
+for (const format of ['pipe-separated', 'separate arguments']) {
+  test(`multiple URLs (${format}) report every result in input order`, async t => {
+    const urls = []
+    for (const version of ['8.4.27', '8.4.26', null]) {
+      urls.push(await serve(t, (req, res) => {
+        if (version) res.setHeader('X-Powered-By', `PHP/${version}`)
+        res.end()
+      }))
+    }
+    const args = format === 'pipe-separated' ? [urls.join(' | ')] : urls
+    const result = await run([...args, '--json'])
+    assert.equal(result.stderr, '')
+    assert.equal(result.code, 1)
+    const reports = JSON.parse(result.stdout)
+    assert.deepEqual(reports.map(report => report.url), urls)
+    assert.deepEqual(reports.map(report => report.patch_status), ['ok', 'potentially_vulnerable', 'unknown'])
+    assert.deepEqual(reports.map(report => report.php_version), ['8.4.27', '8.4.26', null])
+    assert.deepEqual(reports.map(report => report.exit_code), [0, 1, 3])
+
+    const text = await run(args)
+    assert.equal(text.stderr, '')
+    assert.equal(text.code, 1)
+    assert.equal(text.stdout, reports.map(report =>
+      `${report.url}: ${report.patch_status.replace('_', ' ').toUpperCase()}: ${report.reason}\n`
+    ).join(''))
+  })
+}
+
+for (const [first, expectedCode] of [['8.4.27', 0], [null, 3]]) {
+  test(`multiple URLs aggregate exit code ${expectedCode}`, async t => {
+    const url = await serve(t, (req, res) => {
+      const version = req.url === '/first' ? first : '8.4.27'
+      if (version) res.setHeader('X-Powered-By', `PHP/${version}`)
+      res.end()
+    })
+    const result = await run([`${url}first | ${url}second`, '--json'])
+    assert.equal(result.code, expectedCode)
+    assert.deepEqual(JSON.parse(result.stdout).map(report => report.exit_code), [expectedCode, 0])
+  })
+}
+
+test('a failed URL does not prevent checking later URLs', async t => {
+  const url = await serve(t, (req, res) => { res.setHeader('X-Powered-By', 'PHP/8.4.27'); res.end() })
+  const result = await run([`not-a-url | ${url}`, '--json'])
+  assert.equal(result.stderr, '')
+  assert.equal(result.code, 3)
+  const reports = JSON.parse(result.stdout)
+  assert.equal(reports[0].patch_status, 'unknown')
+  assert.ok(reports[0].reason)
+  assert.equal(reports[1].patch_status, 'ok')
+})
+
+for (const args of [[], [''], ['   '], ['|'], ['https://example.com |'], ['| https://example.com'], ['https://example.com || https://example.org']]) {
+  test(`rejects missing or empty URLs: ${JSON.stringify(args)}`, async () => {
+    const result = await run(args)
+    assert.equal(result.code, 2)
+    assert.equal(result.stdout, '')
+    assert.match(result.stderr, /Provide one or more non-empty URLs/)
+    assert.match(result.stderr, /Usage:/)
+  })
+}
