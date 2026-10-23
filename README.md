@@ -27,6 +27,17 @@ Check a website:
 node phpcheck.js "https://example.com"
 ```
 
+Check multiple websites using a quoted, pipe-separated list or separate arguments:
+
+```sh
+node phpcheck.js "https://example1.com | https://example2.com | https://example3.com"
+node phpcheck.js "https://example1.com" "https://example2.com"
+```
+
+Keep the pipe-separated list in quotes so the shell does not interpret `|` as
+a pipeline. Each website is checked independently, with its URL included in
+the text output. `--timeout` applies to each request.
+
 ## Results
 
 | Result | Exit code | Meaning |
@@ -37,6 +48,11 @@ node phpcheck.js "https://example.com"
 
 Use `--json` for machine-readable output. `patch_status` is `ok`,
 `potentially_vulnerable` or `unknown`. Invalid arguments exit with code `2`.
+
+For multiple websites, `--json` returns an array of reports, each including a
+`url` field; single-URL JSON output remains unchanged. The overall exit code is
+`1` if any website is potentially vulnerable, otherwise `3` if any check is
+unknown, otherwise `0`. Failed checks do not stop the remaining checks.
 
 Versions below a listed upstream fix return `potentially_vulnerable` and
 exit `1`. PHP 5.4–5.6, 7.0–7.4, 8.0 and 8.1 also return this warning, even

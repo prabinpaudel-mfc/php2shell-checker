@@ -5,7 +5,8 @@ const VERSION = '1.0.0'
 // Official PHP releases fixing both CVEs, published 2026-10-21.
 const FIXED_IN = { '8.2': 35, '8.3': 36, '8.4': 27, '8.5': 12 }
 const OLDER_BRANCHES = new Set(['5.4', '5.5', '5.6', '7.0', '7.1', '7.2', '7.3', '7.4', '8.0', '8.1'])
-const USAGE = 'Usage: node phpcheck.js URL [--timeout SECONDS] [--json]\n' +
+const USAGE = 'Usage: node phpcheck.js URL [URL ...] [--timeout SECONDS] [--json]\n' +
+  '       node phpcheck.js "URL | URL | ..." [--timeout SECONDS] [--json]\n' +
   '       node phpcheck.js --version'
 
 function versionStatus(version) {
@@ -38,7 +39,7 @@ async function urlHeaders(address, timeout) {
 }
 
 async function main() {
-  let values, address, timeout
+  let values, addresses, timeout
   try {
     const args = parseArgs({
       allowPositionals: true,
@@ -52,9 +53,9 @@ async function main() {
     values = args.values
     if (values.version) return console.log(VERSION)
     if (values.help) return console.log(USAGE)
-    address = args.positionals[0]
-    if (args.positionals.length !== 1) {
-      throw new Error('Provide one URL')
+    addresses = args.positionals.flatMap(address => address.split('|').map(url => url.trim()))
+    if (!addresses.length || addresses.some(address => !address)) {
+      throw new Error('Provide one or more non-empty URLs')
     }
     timeout = Number(values.timeout)
     if (!(timeout > 0 && timeout <= 60)) throw new Error('--timeout must be greater than 0 and at most 60 seconds')
@@ -64,6 +65,25 @@ async function main() {
     return
   }
 
+  const reports = []
+  for (const address of addresses) {
+    reports.push({ url: address, ...await checkUrl(address, timeout) })
+  }
+  const multiple = reports.length > 1
+  if (values.json) {
+    const { url, ...report } = reports[0]
+    console.log(JSON.stringify(multiple ? reports : report))
+  } else {
+    for (const report of reports) {
+      console.log((multiple ? report.url + ': ' : '') +
+        report.patch_status.replace('_', ' ').toUpperCase() + ': ' + report.reason)
+    }
+  }
+  process.exitCode = reports.some(report => report.exit_code === 1) ? 1
+    : reports.some(report => report.exit_code === 3) ? 3 : 0
+}
+
+async function checkUrl(address, timeout) {
   let version = null, error = null, status = 'unknown'
   try {
     const text = await urlHeaders(address, timeout)
@@ -91,9 +111,7 @@ async function main() {
     }
   }
   const code = { ok: 0, potentially_vulnerable: 1, unknown: 3 }[result.patch_status]
-  const report = { ...result, php_version: version, exit_code: code }
-  console.log(values.json ? JSON.stringify(report) : result.patch_status.replace('_', ' ').toUpperCase() + ': ' + result.reason)
-  process.exitCode = code
+  return { ...result, php_version: version, exit_code: code }
 }
 
 main()
